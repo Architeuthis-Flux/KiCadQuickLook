@@ -1,0 +1,135 @@
+name: KiCadQuickLook
+options:
+  bundleIdPrefix: com.kevincappuccio
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: LK2RWK9EUK
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.9"
+    ENABLE_HARDENED_RUNTIME: YES
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+
+targets:
+  KiCadQuickLook:
+    type: application
+    platform: macOS
+    sources:
+      - App
+      - Shared
+      - path: Vendor/kicanvas/kicanvas.js
+        buildPhase: resources
+      - path: SampleFiles
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: PreviewExtension
+      - target: ThumbnailExtension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kevincappuccio.KiCadQuickLook
+        PRODUCT_NAME: KiCad QuickLook
+    entitlements:
+      path: App/KiCadQuickLook.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.files.user-selected.read-only: true
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: KiCad QuickLook
+        LSApplicationCategoryType: public.app-category.utilities
+        NSHumanReadableCopyright: Uses KiCanvas by Alethea Katherine Flowers
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: org.kicad.pcb
+            UTTypeDescription: KiCad PCB Layout
+            UTTypeConformsTo:
+              - public.plain-text
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - kicad_pcb
+          - UTTypeIdentifier: org.kicad.schematic
+            UTTypeDescription: KiCad Schematic
+            UTTypeConformsTo:
+              - public.plain-text
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - kicad_sch
+          - UTTypeIdentifier: org.kicad.project
+            UTTypeDescription: KiCad Project
+            UTTypeConformsTo:
+              - public.json
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - kicad_pro
+
+  PreviewExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - PreviewExtension
+      - Shared
+      - path: Vendor/kicanvas/kicanvas.js
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kevincappuccio.KiCadQuickLook.PreviewExtension
+        PRODUCT_NAME: KiCadPreviewExtension
+    entitlements:
+      path: PreviewExtension/PreviewExtension.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.files.user-selected.read-only: true
+        com.apple.security.temporary-exception.files.absolute-path.read-only:
+          - /
+    info:
+      path: PreviewExtension/Info.plist
+      properties:
+        CFBundleDisplayName: KiCad Preview
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.quicklook.preview
+          NSExtensionPrincipalClass: PreviewViewController
+          NSExtensionAttributes:
+            QLSupportedContentTypes:
+              - org.kicad.pcb
+              - org.kicad.schematic
+              - org.kicad.project
+
+  ThumbnailExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - ThumbnailExtension
+      - Shared
+      - path: Vendor/kicanvas/kicanvas.js
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kevincappuccio.KiCadQuickLook.ThumbnailExtension
+        PRODUCT_NAME: KiCadThumbnailExtension
+    entitlements:
+      path: ThumbnailExtension/ThumbnailExtension.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.files.user-selected.read-only: true
+        com.apple.security.temporary-exception.files.absolute-path.read-only:
+          - /
+    info:
+      path: ThumbnailExtension/Info.plist
+      properties:
+        CFBundleDisplayName: KiCad Thumbnails
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.quicklook.thumbnail
+          NSExtensionPrincipalClass: ThumbnailProvider
+          NSExtensionAttributes:
+            QLSupportedContentTypes:
+              - org.kicad.pcb
+              - org.kicad.schematic
+              - org.kicad.project
+            QLThumbnailMinimumDimension: 16

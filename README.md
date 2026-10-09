@@ -36,6 +36,19 @@ then enable “KiCad Preview” and “KiCad Thumbnails” in System Settings �
 General → Login Items & Extensions → Quick Look. If Finder keeps showing
 old previews, run `qlmanage -r && qlmanage -r cache`.
 
+### Without Xcode
+
+`Scripts/build-without-xcode.sh` builds, signs, and (with `--install`)
+installs the app using only the Command Line Tools: it compiles each target
+with `swiftc`, assembles the `.app` and `.appex` bundles by hand, signs them
+with your Developer ID (set `IDENTITY=-` for an ad-hoc signature), and
+`--install` also registers the file types and enables both extensions, so
+no trip through System Settings is needed.
+
+```sh
+Scripts/build-without-xcode.sh --install
+```
+
 ## Testing the render pipeline without Xcode
 
 `Scripts/test-render.swift` drives the shared rendering code in an

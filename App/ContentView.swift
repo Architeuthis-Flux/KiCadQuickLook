@@ -146,6 +146,11 @@ struct KiCanvasPreview: NSViewRepresentable {
     }
 }
 
+// Xcode canvas preview only; the #Preview macro needs Xcode's macro
+// plugin, which the Command Line Tools build (Scripts/build-without-xcode.sh)
+// does not have.
+#if DEBUG
 #Preview {
     ContentView()
 }
+#endif

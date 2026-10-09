@@ -39,7 +39,7 @@ final class KiCanvasSchemeHandler: NSObject, WKURLSchemeHandler {
             statusCode: 200,
             httpVersion: "HTTP/1.1",
             headerFields: [
-                "Content-Type": "\(resource.mimeType); charset=utf-8",
+                "Content-Type": Self.contentType(for: resource.mimeType),
                 "Content-Length": String(resource.data.count),
             ]
         ) else {
@@ -52,4 +52,15 @@ final class KiCanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {}
+
+    /// Only text-like types carry a charset: WebAssembly streaming
+    /// compilation requires the response type to be exactly
+    /// `application/wasm`, and binary model files have no encoding.
+    static func contentType(for mimeType: String) -> String {
+        let textual = mimeType.hasPrefix("text/")
+            || mimeType.hasSuffix("javascript")
+            || mimeType.hasSuffix("json")
+            || mimeType.hasSuffix("xml")
+        return textual ? "\(mimeType); charset=utf-8" : mimeType
+    }
 }

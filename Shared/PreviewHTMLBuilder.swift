@@ -9,10 +9,13 @@ import Foundation
 /// Nothing is fetched from the network.
 enum PreviewHTMLBuilder {
     enum BuilderError: LocalizedError {
-        case missingKiCanvas
+        case missingResource(String)
 
         var errorDescription: String? {
-            "kicanvas.js is missing from the extension bundle"
+            switch self {
+            case .missingResource(let name):
+                return "\(name) is missing from the extension bundle"
+            }
         }
     }
 
@@ -27,18 +30,26 @@ enum PreviewHTMLBuilder {
         switch content {
         case .document(let type, let text):
             return try documentPage(type: type, content: text, bundle: bundle, interactive: interactive)
+        case .model(let format, let data):
+            return try ModelPreviewHTMLBuilder.page(format: format, data: data, bundle: bundle, interactive: interactive)
         case .message(let title, let detail):
             return Page(html: messagePage(title: title, detail: detail), resources: [:])
         }
     }
 
-    private static func kicanvasData(bundle: Bundle) throws -> Data {
-        guard let url = bundle.url(forResource: "kicanvas", withExtension: "js"),
+    /// Loads a vendored resource (kicanvas.js, o3dv.min.js, …) from the
+    /// extension bundle.
+    static func resourceData(_ name: String, extension ext: String, bundle: Bundle) throws -> Data {
+        guard let url = bundle.url(forResource: name, withExtension: ext),
               let data = try? Data(contentsOf: url)
         else {
-            throw BuilderError.missingKiCanvas
+            throw BuilderError.missingResource("\(name).\(ext)")
         }
         return data
+    }
+
+    private static func kicanvasData(bundle: Bundle) throws -> Data {
+        try resourceData("kicanvas", extension: "js", bundle: bundle)
     }
 
     private static func documentPage(

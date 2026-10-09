@@ -83,6 +83,7 @@ final class KiCanvasWebView: WKWebView {
 
     private let coordinator = Coordinator()
     private let schemeHandler = KiCanvasSchemeHandler()
+    private var keepAlive: Timer?
 
     init(frame: CGRect) {
         let configuration = WKWebViewConfiguration()
@@ -123,14 +124,18 @@ final class KiCanvasWebView: WKWebView {
             onReady: onReady.map { handler in
                 { DispatchQueue.main.async { handler() } }
             },
-            onRendered: { result in
-                DispatchQueue.main.async { completion(result) }
+            onRendered: { [weak self] result in
+                DispatchQueue.main.async {
+                    self?.stopKeepAlive()
+                    completion(result)
+                }
             }
         )
         let coordinator = self.coordinator
         DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
             coordinator.finish(.failure(.timedOut), generation: generation)
         }
+        startKeepAlive()
         for (path, resource) in page.resources {
             schemeHandler.setResource(path: path, mimeType: resource.mimeType, data: resource.data)
         }
@@ -155,7 +160,29 @@ final class KiCanvasWebView: WKWebView {
         )
     }
 
+    /// Pokes the page while a render is in flight.
+    ///
+    /// Model pages hand the CAD work to a Web Worker and leave the page's
+    /// main thread idle. In an offscreen web view (thumbnails) that idle
+    /// page is throttled regardless of `inactiveSchedulingPolicy`: worker
+    /// messages and timers stop being delivered and loads that take two
+    /// seconds in a foreground page run into the deadline. A periodic
+    /// script evaluation from the host keeps the content process serviced;
+    /// without it, half the STEP renders in the offscreen harness stalled.
+    private func startKeepAlive() {
+        stopKeepAlive()
+        keepAlive = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.evaluateJavaScript("0", completionHandler: nil)
+        }
+    }
+
+    private func stopKeepAlive() {
+        keepAlive?.invalidate()
+        keepAlive = nil
+    }
+
     func tearDown() {
+        stopKeepAlive()
         configuration.userContentController.removeScriptMessageHandler(forName: "renderState")
         navigationDelegate = nil
     }

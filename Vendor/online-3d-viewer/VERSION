@@ -1,0 +1,9 @@
+source: https://registry.npmjs.org/online-3d-viewer/-/online-3d-viewer-0.18.0.tgz (build/engine/o3dv.min.js)
+package: online-3d-viewer 0.18.0 (https://github.com/kovacsv/Online3DViewer)
+fetched: 2026-10-09
+bundles: three.js r176 and its 3MFLoader (MIT)
+license: MIT, see LICENSE.md in this directory
+notes: unmodified. The STEP importer in this build fetches occt-import-js
+       from a CDN inside a Web Worker; the preview page overrides
+       ImporterOcct.ImportContent to run the locally bundled
+       occt-import-js instead (see Shared/ModelPreviewHTMLBuilder.swift).

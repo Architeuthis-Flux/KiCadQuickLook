@@ -1,0 +1,8 @@
+source: https://registry.npmjs.org/occt-import-js/-/occt-import-js-0.0.23.tgz (dist/occt-import-js.js, dist/occt-import-js.wasm)
+package: occt-import-js 0.0.23 (https://github.com/kovacsv/occt-import-js)
+fetched: 2026-10-09
+license: LGPL-2.1 (occt-import-js, see LICENSE.occt-import-js.txt);
+         Open CASCADE Technology is LGPL-2.1 with the OCCT exception
+         (see LICENSE.occt.txt and https://dev.opencascade.org/doc/overview/html/index.html#intro_license)
+notes: unmodified WebAssembly build of Open CASCADE's STEP/IGES/BREP
+       importers plus the emscripten glue script.

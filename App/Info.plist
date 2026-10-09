@@ -23,7 +23,7 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Uses KiCanvas by Alethea Katherine Flowers</string>
+	<string>Uses KiCanvas by Alethea Katherine Flowers, Online 3D Viewer by Viktor Kovacs, and Open CASCADE Technology</string>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict>
@@ -74,6 +74,49 @@
 				<key>public.filename-extension</key>
 				<array>
 					<string>kicad_pro</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>STEP 3D Model</string>
+			<key>UTTypeIdentifier</key>
+			<string>org.iso.step</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>step</string>
+					<string>stp</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>model/step</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>3D Manufacturing Format Model</string>
+			<key>UTTypeIdentifier</key>
+			<string>io.3mf.model</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>3mf</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>model/3mf</string>
 				</array>
 			</dict>
 		</dict>

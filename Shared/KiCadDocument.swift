@@ -9,9 +9,27 @@ enum KiCadDocumentType: String {
     case schematic
 }
 
+/// A 3D model format rendered by the Online 3D Viewer page.
+enum ModelFormat: String {
+    case step
+    case threeMF = "3mf"
+
+    /// Extension of the document resource served to the page; the viewer
+    /// picks its importer from it.
+    var fileExtension: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .step: return "STEP"
+        case .threeMF: return "3MF"
+        }
+    }
+}
+
 /// What the preview should display for a given file.
 enum PreviewContent {
     case document(type: KiCadDocumentType, content: String)
+    case model(format: ModelFormat, data: Data)
     case message(title: String, detail: String)
 }
 
@@ -37,7 +55,28 @@ enum KiCadFileLoader {
     /// are not parseable by KiCanvas.
     static let minimumBoardVersion = 20_211_014
 
-    static func loadPreviewContent(for url: URL) throws -> PreviewContent {
+    /// Largest model file worth attempting. STEP files are read and
+    /// tessellated by Open CASCADE compiled to WebAssembly (measured at
+    /// just under 1 s per MB in the offscreen harness, dominated by
+    /// reading the B-rep rather than by tessellation quality; KiCad board
+    /// exports with every drill hole modelled run to gigabytes) and 3MF
+    /// packages are unzipped and parsed as XML (about 0.35 s per MB of
+    /// package, with the XML expanding roughly tenfold in memory). Previews
+    /// have a 90 s budget, thumbnails about 15 s including WebAssembly
+    /// start-up; the caps leave a 2× margin. Oversized models get a message
+    /// instead of a spinner that runs into the timeout.
+    static func maximumModelSize(for format: ModelFormat, thumbnail: Bool) -> Int {
+        let megabytes: Int
+        switch format {
+        case .step: megabytes = thumbnail ? 8 : 48
+        case .threeMF: megabytes = thumbnail ? 12 : 24
+        }
+        return megabytes * 1024 * 1024
+    }
+
+    /// - Parameter thumbnail: Whether the content feeds the thumbnail
+    ///   extension, whose much shorter deadline lowers the model size cap.
+    static func loadPreviewContent(for url: URL, thumbnail: Bool = false) throws -> PreviewContent {
         switch url.pathExtension.lowercased() {
         case "kicad_pcb":
             let text = try readText(url)
@@ -47,10 +86,18 @@ enum KiCadFileLoader {
             return .document(type: .schematic, content: sanitizeArcs(text))
         case "kicad_pro":
             return try loadProject(url)
+        case "step", "stp":
+            return try loadModel(url, format: .step, thumbnail: thumbnail)
+        case "3mf":
+            return try loadModel(url, format: .threeMF, thumbnail: thumbnail)
         default:
             // Fall back to sniffing the content; QL should only hand us
             // declared types, but be forgiving.
-            let text = try readText(url)
+            let data = try readData(url)
+            if looksLikeSTEP(data) {
+                return try loadModel(url, format: .step, thumbnail: thumbnail)
+            }
+            let text = try decodeText(data, from: url)
             if text.hasPrefix("(kicad_pcb") { return contentForBoard(text) }
             if text.hasPrefix("(kicad_sch") { return .document(type: .schematic, content: text) }
             return .message(
@@ -58,6 +105,52 @@ enum KiCadFileLoader {
                 detail: "Not a recognized KiCad document."
             )
         }
+    }
+
+    // MARK: - 3D models
+
+    private static func loadModel(_ url: URL, format: ModelFormat, thumbnail: Bool) throws -> PreviewContent {
+        let maximumSize = maximumModelSize(for: format, thumbnail: thumbnail)
+        if let size = fileSize(url), size > maximumSize {
+            let formatter = ByteCountFormatter()
+            formatter.countStyle = .file
+            return .message(
+                title: url.lastPathComponent,
+                detail: "This \(format.displayName) file is \(formatter.string(fromByteCount: Int64(size))); "
+                    + "the previewer renders \(format.displayName) models up to "
+                    + "\(formatter.string(fromByteCount: Int64(maximumSize)))."
+            )
+        }
+        let data = try readData(url, limit: maximumSize)
+        switch format {
+        case .step:
+            guard looksLikeSTEP(data) else {
+                return .message(
+                    title: url.lastPathComponent,
+                    detail: "Not a STEP file (no ISO-10303-21 header)."
+                )
+            }
+        case .threeMF:
+            guard looksLikeZip(data) else {
+                return .message(
+                    title: url.lastPathComponent,
+                    detail: "Not a 3MF package (expected a zip container)."
+                )
+            }
+        }
+        return .model(format: format, data: data)
+    }
+
+    /// STEP Part 21 files open with `ISO-10303-21;`, possibly after a BOM
+    /// or whitespace. The `.stp` extension is also used by unrelated
+    /// formats (SystemTap scripts, HTML Help projects), so sniff.
+    static func looksLikeSTEP(_ data: Data) -> Bool {
+        data.prefix(256).range(of: Data("ISO-10303-21".utf8)) != nil
+    }
+
+    /// 3MF packages are OPC zip containers.
+    static func looksLikeZip(_ data: Data) -> Bool {
+        data.starts(with: [0x50, 0x4B, 0x03, 0x04])
     }
 
     // MARK: - Project resolution
@@ -396,14 +489,25 @@ enum KiCadFileLoader {
 
     // MARK: - IO
 
-    private static func readText(_ url: URL) throws -> String {
-        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-        if let size = attributes?[.size] as? Int, size > maximumFileSize {
+    private static func fileSize(_ url: URL) -> Int? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int
+    }
+
+    private static func readData(_ url: URL, limit: Int = maximumFileSize) throws -> Data {
+        if let size = fileSize(url), size > limit {
             throw KiCadFileError.tooLarge(url)
         }
         guard let data = FileManager.default.contents(atPath: url.path) else {
             throw KiCadFileError.unreadable(url)
         }
+        return data
+    }
+
+    private static func readText(_ url: URL) throws -> String {
+        try decodeText(try readData(url), from: url)
+    }
+
+    private static func decodeText(_ data: Data, from url: URL) throws -> String {
         if let text = String(data: data, encoding: .utf8) {
             return text
         }

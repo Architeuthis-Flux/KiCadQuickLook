@@ -29,6 +29,8 @@
 				<string>org.kicad.pcb</string>
 				<string>org.kicad.schematic</string>
 				<string>org.kicad.project</string>
+				<string>org.iso.step</string>
+				<string>io.3mf.model</string>
 			</array>
 		</dict>
 		<key>NSExtensionPointIdentifier</key>

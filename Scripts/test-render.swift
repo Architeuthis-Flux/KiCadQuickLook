@@ -1,13 +1,15 @@
-// Renders a KiCad file through the exact same Shared/ pipeline the Quick
-// Look extensions use, in an offscreen WKWebView, and snapshots to PNG.
+// Renders a KiCad, STEP, or 3MF file through the exact same Shared/
+// pipeline the Quick Look extensions use, in an offscreen WKWebView, and
+// snapshots to PNG.
 //
 // Build & run (from the repo root):
 //   swiftc -o /tmp/kiql-test-render Shared/*.swift Scripts/test-render.swift \
 //     -framework WebKit -framework AppKit
-//   /tmp/kiql-test-render <input-file> <output.png>
+//   /tmp/kiql-test-render <input-file> <output.png> [interactive]
 //
-// The kicanvas.js resource is located via the KICANVAS_JS environment
-// variable or defaults to Vendor/kicanvas/kicanvas.js in the current dir.
+// The vendored resources (kicanvas.js, o3dv.min.js, occt-import-js.*) are
+// collected from every directory under Vendor/ in the current directory
+// (override with KIQL_VENDOR_DIR) into a temporary resource bundle.
 
 import AppKit
 import WebKit
@@ -19,25 +21,56 @@ guard CommandLine.arguments.count >= 3 else {
 
 let inputURL = URL(fileURLWithPath: CommandLine.arguments[1])
 let outputURL = URL(fileURLWithPath: CommandLine.arguments[2])
-// "interactive" exercises the preview path (90 s in-page budget);
-// default exercises the thumbnail path (15 s in-page budget).
+// "interactive" exercises the preview path (90 s in-page budget, full
+// model size cap); default exercises the thumbnail path (15 s in-page
+// budget, thumbnail size cap).
 let interactive = CommandLine.arguments.count > 3 && CommandLine.arguments[3] == "interactive"
+// Native watchdog, seconds (KIQL_TIMEOUT); the in-page budget still applies.
+let harnessTimeout = TimeInterval(ProcessInfo.processInfo.environment["KIQL_TIMEOUT"] ?? "") ?? 120
 
-// PreviewHTMLBuilder looks kicanvas.js up in a bundle; point a Bundle at the
-// vendor directory.
-let vendorPath = ProcessInfo.processInfo.environment["KICANVAS_DIR"]
-    ?? FileManager.default.currentDirectoryPath + "/Vendor/kicanvas"
-guard let vendorBundle = Bundle(path: vendorPath) else {
-    print("FAILED: no bundle at \(vendorPath)")
+// PreviewHTMLBuilder looks resources up in a bundle; stage symlinks to
+// every vendored file in one directory and point a Bundle at it.
+let vendorRoot = ProcessInfo.processInfo.environment["KIQL_VENDOR_DIR"]
+    ?? FileManager.default.currentDirectoryPath + "/Vendor"
+let staging = URL(fileURLWithPath: NSTemporaryDirectory())
+    .appendingPathComponent("kiql-test-resources-\(getpid())")
+do {
+    let fm = FileManager.default
+    try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+    for directory in try fm.contentsOfDirectory(atPath: vendorRoot) {
+        let directoryURL = URL(fileURLWithPath: vendorRoot).appendingPathComponent(directory)
+        guard (try? directoryURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+        for file in try fm.contentsOfDirectory(atPath: directoryURL.path)
+        where ["js", "wasm"].contains((file as NSString).pathExtension) {
+            try fm.createSymbolicLink(
+                at: staging.appendingPathComponent(file),
+                withDestinationURL: directoryURL.appendingPathComponent(file)
+            )
+        }
+    }
+} catch {
+    print("FAILED staging resources from \(vendorRoot): \(error)")
+    exit(1)
+}
+guard let vendorBundle = Bundle(path: staging.path) else {
+    print("FAILED: no bundle at \(staging.path)")
     exit(1)
 }
 
 let content: PreviewContent
 do {
-    content = try KiCadFileLoader.loadPreviewContent(for: inputURL)
+    content = try KiCadFileLoader.loadPreviewContent(for: inputURL, thumbnail: !interactive)
 } catch {
     print("FAILED loading: \(error)")
     exit(1)
+}
+switch content {
+case .document(let type, let text):
+    print("content: \(type) document, \(text.utf8.count) bytes")
+case .model(let format, let data):
+    print("content: \(format.displayName) model, \(data.count) bytes")
+case .message(let title, let detail):
+    print("content: message — \(title): \(detail)")
 }
 
 let page: PreviewHTMLBuilder.Page
@@ -59,28 +92,55 @@ let webView = KiCanvasWebView(frame: CGRect(origin: .zero, size: size))
 window.contentView = webView
 
 let start = Date()
-webView.render(page: page, timeout: 120) { result in
-    switch result {
-    case .failure(let error):
-        print("FAILED render after \(String(format: "%.1f", Date().timeIntervalSince(start)))s: \(error)")
-        exit(1)
-    case .success:
-        print("loaded in \(String(format: "%.1f", Date().timeIntervalSince(start)))s; snapshotting…")
-        webView.takeSnapshot(with: nil) { image, error in
-            guard let image = image,
-                  let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
-            else {
-                print("FAILED snapshot: \(String(describing: error))")
-                exit(1)
-            }
-            let rep = NSBitmapImageRep(cgImage: cg)
-            try! rep.representation(using: .png, properties: [:])!.write(to: outputURL)
-            print("OK -> \(outputURL.path)")
-            exit(0)
+
+// With KIQL_PHASES=1, echo the page's progress overlay text as it changes,
+// with timestamps, so slow phases (CAD kernel start-up, tessellation,
+// scene building) can be told apart. Off by default: the polling itself
+// keeps an offscreen page serviced, which would mask the throttling that
+// KiCanvasWebView's keep-alive exists to counter.
+var lastStatus = ""
+if ProcessInfo.processInfo.environment["KIQL_PHASES"] == "1" {
+    Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+        webView.evaluateJavaScript("document.getElementById('kiql-overlay-text')?.textContent ?? ''") { value, _ in
+            guard let status = value as? String, status != lastStatus else { return }
+            lastStatus = status
+            print("  [\(String(format: "%5.1f", Date().timeIntervalSince(start)))s] \(status)")
         }
     }
 }
 
-RunLoop.main.run(until: Date(timeIntervalSinceNow: 125))
+webView.render(
+    page: page,
+    timeout: harnessTimeout,
+    onReady: {
+        print("ready in \(String(format: "%.1f", Date().timeIntervalSince(start)))s")
+    },
+    completion: { result in
+        switch result {
+        case .failure(let error):
+            print("FAILED render after \(String(format: "%.1f", Date().timeIntervalSince(start)))s: \(error)")
+            exit(1)
+        case .success:
+            print("loaded in \(String(format: "%.1f", Date().timeIntervalSince(start)))s; snapshotting…")
+            webView.evaluateJavaScript("JSON.stringify(window.__kiqlCrop || null)") { crop, _ in
+                print("crop: \(crop ?? "none")")
+                webView.takeSnapshot(with: nil) { image, error in
+                    guard let image = image,
+                          let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+                    else {
+                        print("FAILED snapshot: \(String(describing: error))")
+                        exit(1)
+                    }
+                    let rep = NSBitmapImageRep(cgImage: cg)
+                    try! rep.representation(using: .png, properties: [:])!.write(to: outputURL)
+                    print("OK -> \(outputURL.path)")
+                    exit(0)
+                }
+            }
+        }
+    }
+)
+
+RunLoop.main.run(until: Date(timeIntervalSinceNow: harnessTimeout + 5))
 print("FAILED: harness timed out")
 exit(1)

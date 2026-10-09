@@ -28,7 +28,8 @@ struct ContentView: View {
             guard let provider = providers.first else { return false }
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url = url,
-                      ["kicad_pcb", "kicad_sch", "kicad_pro"].contains(url.pathExtension.lowercased())
+                      ["kicad_pcb", "kicad_sch", "kicad_pro", "step", "stp", "3mf"]
+                          .contains(url.pathExtension.lowercased())
                 else { return }
                 DispatchQueue.main.async { droppedFileURL = url }
             }
@@ -56,7 +57,7 @@ struct ContentView: View {
                 )
                 instructionRow(
                     number: "3",
-                    text: "Select any .kicad_pcb, .kicad_sch, or .kicad_pro file in Finder and press Space."
+                    text: "Select any .kicad_pcb, .kicad_sch, .kicad_pro, .step, or .3mf file in Finder and press Space."
                 )
             }
             .frame(maxWidth: 460)
@@ -66,7 +67,7 @@ struct ContentView: View {
             VStack(spacing: 6) {
                 Text("Test it here")
                     .font(.headline)
-                Text("Drop a KiCad file onto this window to preview it with KiCanvas.")
+                Text("Drop a KiCad, STEP, or 3MF file onto this window to preview it.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -80,9 +81,10 @@ struct ContentView: View {
                     )
             )
 
-            Text("Rendering by KiCanvas — kicanvas.org")
+            Text("KiCad rendering by KiCanvas (kicanvas.org) · 3D rendering by Online 3D Viewer and Open CASCADE")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
         }
         .padding(40)
     }

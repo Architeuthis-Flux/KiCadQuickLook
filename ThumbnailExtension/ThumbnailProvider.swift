@@ -13,13 +13,18 @@ private let logger = Logger(subsystem: "com.kevincappuccio.KiCadQuickLook", cate
 final class ThumbnailProvider: QLThumbnailProvider {
     private static let renderDeadline: TimeInterval = 18
 
-    /// The fraction of the snapshot occupied by the framed content (as
-    /// reported by the page), used to crop board thumbnails to the board
-    /// outline instead of a letterboxed square.
+    /// The region of the snapshot occupied by the framed content (as
+    /// reported by the page, in fractions of the canvas), used to crop
+    /// thumbnails to the board outline or model silhouette instead of a
+    /// letterboxed square. Without an origin the region is centered.
     private struct ContentCrop {
+        let originX: Double?
+        let originY: Double?
         let fractionWidth: Double
         let fractionHeight: Double
-        let followsEdgeCuts: Bool
+        /// Whether the region frames the content tightly enough to crop
+        /// to (a board's Edge.Cuts outline, a model's projected bounds).
+        let isTight: Bool
     }
 
     override func provideThumbnail(
@@ -42,10 +47,11 @@ final class ThumbnailProvider: QLThumbnailProvider {
                     return
                 }
 
-                // Boards with an Edge.Cuts outline get cropped to the board
-                // shape; everything else keeps the full square snapshot.
+                // Boards with an Edge.Cuts outline and 3D models get
+                // cropped to their shape; everything else keeps the full
+                // square snapshot.
                 let (finalImage, contextSize): (CGImage, CGSize)
-                if let crop = crop, crop.followsEdgeCuts,
+                if let crop = crop, crop.isTight,
                    let cropped = Self.cropToContent(cgImage, crop: crop) {
                     finalImage = cropped
                     contextSize = Self.fittedSize(
@@ -69,20 +75,24 @@ final class ThumbnailProvider: QLThumbnailProvider {
         }
     }
 
-    /// Crops the centered content region out of the square snapshot. The
-    /// camera centers the framed bbox and expands it to the canvas aspect,
-    /// so the content is the centered sub-rect given by the fractions.
+    /// Crops the content region out of the square snapshot. KiCanvas
+    /// centers the framed bbox and expands it to the canvas aspect, so its
+    /// region is the centered sub-rect given by the fractions; the model
+    /// page reports an explicit origin (measured from the top-left, which
+    /// is also CGImage's cropping space).
     private static func cropToContent(_ image: CGImage, crop: ContentCrop) -> CGImage? {
         let width = Double(image.width)
         let height = Double(image.height)
         let cropWidth = (width * crop.fractionWidth).rounded()
         let cropHeight = (height * crop.fractionHeight).rounded()
         guard cropWidth >= 8, cropHeight >= 8 else { return nil }
+        let x = crop.originX.map { (width * $0).rounded(.down) } ?? ((width - cropWidth) / 2).rounded(.down)
+        let y = crop.originY.map { (height * $0).rounded(.down) } ?? ((height - cropHeight) / 2).rounded(.down)
         let rect = CGRect(
-            x: ((width - cropWidth) / 2).rounded(.down),
-            y: ((height - cropHeight) / 2).rounded(.down),
-            width: cropWidth,
-            height: cropHeight
+            x: max(0, x),
+            y: max(0, y),
+            width: min(cropWidth, width - max(0, x)),
+            height: min(cropHeight, height - max(0, y))
         )
         return image.cropping(to: rect)
     }
@@ -113,20 +123,25 @@ final class ThumbnailProvider: QLThumbnailProvider {
         }
         let content: PreviewContent
         do {
-            content = try KiCadFileLoader.loadPreviewContent(for: fileURL)
+            // Models above the thumbnail size cap come back as a message
+            // (tessellating them would blow the thumbnail deadline).
+            content = try KiCadFileLoader.loadPreviewContent(for: fileURL, thumbnail: true)
         } catch {
             logger.error("thumbnail load failed for \(fileURL.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)")
             completion(nil, nil)
             return
         }
-        guard case .document = content,
-              let page = try? PreviewHTMLBuilder.page(
-                  for: content,
-                  bundle: Bundle(for: Self.self),
-                  interactive: false
-              )
-        else {
-            logger.info("thumbnail fallback (non-document content) for \(fileURL.lastPathComponent, privacy: .public)")
+        if case .message = content {
+            logger.info("thumbnail fallback (message content) for \(fileURL.lastPathComponent, privacy: .public)")
+            completion(nil, nil)
+            return
+        }
+        guard let page = try? PreviewHTMLBuilder.page(
+            for: content,
+            bundle: Bundle(for: Self.self),
+            interactive: false
+        ) else {
+            logger.info("thumbnail fallback (page build failed) for \(fileURL.lastPathComponent, privacy: .public)")
             completion(nil, nil)
             return
         }
@@ -168,8 +183,9 @@ final class ThumbnailProvider: QLThumbnailProvider {
                 finish(nil, nil)
                 return
             }
-            // The page records how much of the canvas the framed content
-            // occupies (and whether it framed the Edge.Cuts outline).
+            // The page records where on the canvas the framed content
+            // sits (and whether that region is tight enough to crop to:
+            // a board's Edge.Cuts outline, or a model's projected bounds).
             webView.evaluateJavaScript("JSON.stringify(window.__kiqlCrop || null)") { cropJSON, cropError in
                 logger.info("thumbnail crop info: \(String(describing: cropJSON), privacy: .public) err: \(String(describing: cropError), privacy: .public)")
                 var crop: ContentCrop?
@@ -179,9 +195,11 @@ final class ThumbnailProvider: QLThumbnailProvider {
                    let fw = dict["fw"] as? Double,
                    let fh = dict["fh"] as? Double {
                     crop = ContentCrop(
+                        originX: dict["fx"] as? Double,
+                        originY: dict["fy"] as? Double,
                         fractionWidth: fw,
                         fractionHeight: fh,
-                        followsEdgeCuts: dict["edgeCuts"] as? Bool ?? false
+                        isTight: (dict["tight"] as? Bool ?? false) || (dict["edgeCuts"] as? Bool ?? false)
                     )
                 }
                 let snapshotConfiguration = WKSnapshotConfiguration()
@@ -207,6 +225,16 @@ final class ThumbnailProvider: QLThumbnailProvider {
             colors = (
                 CGColor(red: 0.96, green: 0.95, blue: 0.89, alpha: 1),
                 CGColor(red: 0.55, green: 0.15, blue: 0.15, alpha: 1)
+            )
+        case "step", "stp":
+            colors = (
+                CGColor(red: 0.16, green: 0.20, blue: 0.28, alpha: 1),
+                CGColor(red: 0.62, green: 0.72, blue: 0.85, alpha: 1)
+            )
+        case "3mf":
+            colors = (
+                CGColor(red: 0.22, green: 0.16, blue: 0.10, alpha: 1),
+                CGColor(red: 0.95, green: 0.60, blue: 0.20, alpha: 1)
             )
         default:
             colors = (

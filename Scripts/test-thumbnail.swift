@@ -1,18 +1,20 @@
 #!/usr/bin/env swift
 // Exercises the modern QLThumbnailGenerator pipeline (which is what Finder
 // uses) against a file and writes the result to a PNG for inspection.
-// Usage: swift Scripts/test-thumbnail.swift <input-file> <output.png>
+// Usage: swift Scripts/test-thumbnail.swift <input-file> <output.png> [icon]
+// "icon" requests icon mode, which is how Finder asks for file icons.
 
 import AppKit
 import QuickLookThumbnailing
 
-guard CommandLine.arguments.count == 3 else {
-    print("usage: test-thumbnail.swift <input-file> <output.png>")
+guard CommandLine.arguments.count >= 3 else {
+    print("usage: test-thumbnail.swift <input-file> <output.png> [icon]")
     exit(2)
 }
 
 let inputURL = URL(fileURLWithPath: CommandLine.arguments[1])
 let outputURL = URL(fileURLWithPath: CommandLine.arguments[2])
+let iconMode = CommandLine.arguments.count > 3 && CommandLine.arguments[3] == "icon"
 
 let request = QLThumbnailGenerator.Request(
     fileAt: inputURL,
@@ -20,7 +22,7 @@ let request = QLThumbnailGenerator.Request(
     scale: 1.0,
     representationTypes: .thumbnail
 )
-request.iconMode = false
+request.iconMode = iconMode
 
 QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { thumbnail, error in
     if let error = error {

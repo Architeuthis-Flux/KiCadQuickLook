@@ -150,7 +150,9 @@ final class ThumbnailProvider: QLThumbnailProvider {
         let pixelSize = CGSize(width: size.width * scale, height: size.height * scale)
         let webView = KiCanvasWebView(frame: CGRect(origin: .zero, size: pixelSize))
 
-        // Offscreen WKWebViews only paint when parented to a window.
+        // Offscreen WKWebViews only paint when parented to a window. The
+        // window is transparent so model pages (whose background is
+        // transparent) snapshot as a cut-out of the model.
         let window = NSWindow(
             contentRect: CGRect(origin: .zero, size: pixelSize),
             styleMask: .borderless,
@@ -158,6 +160,8 @@ final class ThumbnailProvider: QLThumbnailProvider {
             defer: false
         )
         window.isReleasedWhenClosed = false
+        window.isOpaque = false
+        window.backgroundColor = .clear
         window.contentView = webView
 
         var completed = false

@@ -95,8 +95,28 @@ let window = NSWindow(
     contentRect: CGRect(origin: .zero, size: size),
     styleMask: .borderless, backing: .buffered, defer: false
 )
+window.isOpaque = false
+window.backgroundColor = .clear
 let webView = KiCanvasWebView(frame: CGRect(origin: .zero, size: size))
 window.contentView = webView
+
+/// Fraction of fully transparent and of fully opaque pixels, to check that
+/// model pages snapshot as a cut-out (transparent page background).
+func alphaStatistics(_ image: CGImage) -> (transparent: Double, opaque: Double) {
+    let width = image.width, height = image.height
+    var pixels = [UInt8](repeating: 0, count: width * height * 4)
+    guard let context = CGContext(
+        data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else { return (0, 0) }
+    context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    var transparent = 0, opaque = 0
+    for index in stride(from: 3, to: pixels.count, by: 4) {
+        if pixels[index] == 0 { transparent += 1 } else if pixels[index] == 255 { opaque += 1 }
+    }
+    let total = Double(width * height)
+    return (Double(transparent) / total, Double(opaque) / total)
+}
 
 let start = Date()
 
@@ -140,6 +160,8 @@ webView.render(
                     }
                     let rep = NSBitmapImageRep(cgImage: cg)
                     try! rep.representation(using: .png, properties: [:])!.write(to: outputURL)
+                    let alpha = alphaStatistics(cg)
+                    print("alpha: \(Int(alpha.transparent * 100))% transparent, \(Int(alpha.opaque * 100))% opaque pixels")
                     print("OK -> \(outputURL.path)")
                     exit(0)
                 }

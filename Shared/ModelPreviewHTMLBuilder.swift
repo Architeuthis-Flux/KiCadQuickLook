@@ -52,13 +52,19 @@ enum ModelPreviewHTMLBuilder {
         <head>
         <meta charset="utf-8">
         <style>
+            /* The page is transparent: in the Quick Look panel the model
+               floats over the panel background like the system's own 3D
+               previews, and thumbnails come out as a cut-out of the
+               model's shape. Text follows the host's light/dark
+               appearance. */
             html, body {
                 margin: 0;
                 padding: 0;
                 width: 100%;
                 height: 100%;
                 overflow: hidden;
-                background: #3b3e46;
+                background: transparent;
+                color-scheme: light dark;
             }
             #kiql-viewer {
                 position: absolute;
@@ -67,6 +73,7 @@ enum ModelPreviewHTMLBuilder {
             #kiql-viewer canvas {
                 display: block;
                 outline: none;
+                background: transparent;
             }
             #kiql-overlay {
                 position: fixed;
@@ -76,20 +83,28 @@ enum ModelPreviewHTMLBuilder {
                 align-items: center;
                 justify-content: center;
                 gap: 14px;
-                background: #3b3e46;
-                color: #a0a0b0;
+                background: transparent;
+                color: #5c5c66;
                 font-family: -apple-system, sans-serif;
                 font-size: 13px;
                 z-index: 10;
+                pointer-events: none;
             }
             #kiql-overlay.hidden { display: none; }
             #kiql-overlay .spinner {
                 width: 28px;
                 height: 28px;
-                border: 3px solid #333;
-                border-top-color: #81a2be;
+                border: 3px solid rgba(0, 0, 0, 0.12);
+                border-top-color: #4a7fb5;
                 border-radius: 50%;
                 animation: kiql-spin 0.9s linear infinite;
+            }
+            @media (prefers-color-scheme: dark) {
+                #kiql-overlay { color: #a0a0b0; }
+                #kiql-overlay .spinner {
+                    border-color: rgba(255, 255, 255, 0.15);
+                    border-top-color: #81a2be;
+                }
             }
             @keyframes kiql-spin { to { transform: rotate(360deg); } }
         </style>
@@ -246,6 +261,14 @@ enum ModelPreviewHTMLBuilder {
         const container = document.getElementById("kiql-viewer");
         const canvas = document.createElement("canvas");
         container.appendChild(canvas);
+        // The viewer creates its WebGL renderer without an alpha channel.
+        // A canvas hands back its existing context regardless of the
+        // attributes a later getContext() asks for, so creating an
+        // alpha-capable context first is what makes the clear color's
+        // transparency reach the page.
+        try {
+            canvas.getContext("webgl2", { alpha: true, antialias: true, premultipliedAlpha: true });
+        } catch (e) {}
         const viewer = new OV.Viewer();
         viewer.Init(canvas);
         const resize = () => {
@@ -255,7 +278,7 @@ enum ModelPreviewHTMLBuilder {
         };
         resize();
         window.addEventListener("resize", resize);
-        viewer.SetBackgroundColor(new OV.RGBAColor(0x3b, 0x3e, 0x46, 255));
+        viewer.SetBackgroundColor(new OV.RGBAColor(0, 0, 0, 0));
 
         // Projects the model's bounding box through the current camera and
         // returns its extent in normalized device coordinates.

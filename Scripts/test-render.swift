@@ -2,10 +2,17 @@
 // pipeline the Quick Look extensions use, in an offscreen WKWebView, and
 // snapshots to PNG.
 //
-// Build & run (from the repo root):
-//   swiftc -o /tmp/kiql-test-render Shared/*.swift Scripts/test-render.swift \
+// Build & run (from the repo root). swiftc only allows top-level code in
+// a file named main.swift when compiling several files, so copy this
+// script under that name first:
+//   mkdir -p /tmp/kiql-harness && cp Scripts/test-render.swift /tmp/kiql-harness/main.swift
+//   swiftc -o /tmp/kiql-test-render Shared/*.swift /tmp/kiql-harness/main.swift \
 //     -framework WebKit -framework AppKit
 //   /tmp/kiql-test-render <input-file> <output.png> [interactive]
+//
+// Environment: KIQL_PHASES=1 prints the page's progress phases with
+// timestamps; KIQL_TIMEOUT=<seconds> overrides the native watchdog
+// (default 120); KIQL_VENDOR_DIR points at a Vendor/ directory.
 //
 // The vendored resources (kicanvas.js, o3dv.min.js, occt-import-js.*) are
 // collected from every directory under Vendor/ in the current directory

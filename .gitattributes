@@ -1,5 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 
-# Vendored binaries
+# Vendored files are kept byte-for-byte as published upstream
+Vendor/** -text
 *.wasm binary

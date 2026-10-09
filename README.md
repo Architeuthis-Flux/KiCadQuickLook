@@ -39,10 +39,14 @@ old previews, run `qlmanage -r && qlmanage -r cache`.
 ## Testing the render pipeline without Xcode
 
 `Scripts/test-render.swift` drives the shared rendering code in an
-offscreen web view and writes a PNG:
+offscreen web view and writes a PNG. `swiftc` only accepts top-level code
+in a file named `main.swift` when compiling several files, so copy the
+script under that name first:
 
 ```sh
-swiftc -o /tmp/kiql-test-render Shared/*.swift Scripts/test-render.swift -framework WebKit -framework AppKit
+mkdir -p /tmp/kiql-harness && cp Scripts/test-render.swift /tmp/kiql-harness/main.swift
+swiftc -o /tmp/kiql-test-render Shared/*.swift /tmp/kiql-harness/main.swift -framework WebKit -framework AppKit
 /tmp/kiql-test-render path/to/board.kicad_pcb out.png              # thumbnail path
 /tmp/kiql-test-render path/to/model.step out.png interactive       # preview path
+KIQL_PHASES=1 /tmp/kiql-test-render path/to/model.step out.png      # with phase timings
 ```

@@ -55,23 +55,38 @@ enum KiCadFileLoader {
     /// are not parseable by KiCanvas.
     static let minimumBoardVersion = 20_211_014
 
-    /// Largest model file worth attempting. STEP files are read and
-    /// tessellated by Open CASCADE compiled to WebAssembly (measured at
-    /// just under 1 s per MB in the offscreen harness, dominated by
-    /// reading the B-rep rather than by tessellation quality; KiCad board
-    /// exports with every drill hole modelled run to gigabytes) and 3MF
-    /// packages are unzipped and parsed as XML (about 0.35 s per MB of
-    /// package, with the XML expanding roughly tenfold in memory). Previews
-    /// have a 90 s budget, thumbnails about 15 s including WebAssembly
-    /// start-up; the caps leave a 2× margin. Oversized models get a message
-    /// instead of a spinner that runs into the timeout.
+    /// Largest model file worth attempting.
+    ///
+    /// STEP files are read and tessellated by Open CASCADE compiled to
+    /// WebAssembly. Time is about 1 s per MB in the offscreen harness,
+    /// but memory is the binding limit: the kernel's STEP reader keeps the
+    /// whole entity graph in memory at 30–70 MB per MB of file (a 21 MB
+    /// connector grew the heap to 0.6 GB, a 17 MB KiCad board export to
+    /// 1.1 GB), and the WebAssembly module can address at most 2 GB.
+    /// Previews are attempted up to 64 MB: light files that size fit,
+    /// dense ones fail with an out-of-memory message from the kernel
+    /// rather than a timeout. Beyond that nothing fits, so the message
+    /// explains why. KiCad board exports with every drill hole and
+    /// component modelled run to hundreds of MB and are out of reach of
+    /// this kernel.
+    ///
+    /// 3MF packages are unzipped and parsed as XML (about 0.35 s per MB of
+    /// package, the XML expanding roughly tenfold in memory). Thumbnails
+    /// have about 15 s including WebAssembly start-up; their caps leave a
+    /// 2× margin.
     static func maximumModelSize(for format: ModelFormat, thumbnail: Bool) -> Int {
         let megabytes: Int
         switch format {
-        case .step: megabytes = thumbnail ? 8 : 48
+        case .step: megabytes = thumbnail ? 8 : 64
         case .threeMF: megabytes = thumbnail ? 12 : 24
         }
         return megabytes * 1024 * 1024
+    }
+
+    /// Rough Open CASCADE memory needed to read a STEP file of the given
+    /// size (see `maximumModelSize`).
+    static func estimatedSTEPMemory(forFileSize size: Int) -> Int {
+        80 * 1024 * 1024 + size * 50
     }
 
     /// - Parameter thumbnail: Whether the content feeds the thumbnail
@@ -114,12 +129,17 @@ enum KiCadFileLoader {
         if let size = fileSize(url), size > maximumSize {
             let formatter = ByteCountFormatter()
             formatter.countStyle = .file
-            return .message(
-                title: url.lastPathComponent,
-                detail: "This \(format.displayName) file is \(formatter.string(fromByteCount: Int64(size))); "
-                    + "the previewer renders \(format.displayName) models up to "
-                    + "\(formatter.string(fromByteCount: Int64(maximumSize)))."
-            )
+            var detail = "This \(format.displayName) file is \(formatter.string(fromByteCount: Int64(size))); "
+                + "the previewer renders \(format.displayName) models up to "
+                + "\(formatter.string(fromByteCount: Int64(maximumSize)))."
+            if format == .step, !thumbnail {
+                let needed = formatter.string(fromByteCount: Int64(estimatedSTEPMemory(forFileSize: size)))
+                detail += " Reading it would take roughly \(needed) of memory, more than the 2 GB the "
+                    + "WebAssembly CAD kernel can address. KiCad exports get this large when every "
+                    + "drill hole and component is modelled; exporting without holes or without "
+                    + "component models gives a previewable file."
+            }
+            return .message(title: url.lastPathComponent, detail: detail)
         }
         let data = try readData(url, limit: maximumSize)
         switch format {

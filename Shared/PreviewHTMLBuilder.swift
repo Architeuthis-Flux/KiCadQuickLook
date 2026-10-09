@@ -24,6 +24,10 @@ enum PreviewHTMLBuilder {
         let html: String
         /// Resources to serve over kiql://, keyed by URL path.
         let resources: [String: KiCanvasSchemeHandler.Resource]
+        /// How long the host should wait for the page's render before
+        /// giving up; pages whose work scales with the input (STEP
+        /// tessellation) ask for more.
+        var timeout: TimeInterval = 100
     }
 
     static func page(for content: PreviewContent, bundle: Bundle = .main, interactive: Bool = true) throws -> Page {

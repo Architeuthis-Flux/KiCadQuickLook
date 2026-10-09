@@ -52,6 +52,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         var completed = false
         webView.render(
             page: page,
+            timeout: page.timeout,
             onReady: {
                 guard !completed else { return }
                 completed = true

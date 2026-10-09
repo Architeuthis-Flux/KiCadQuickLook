@@ -13,13 +13,17 @@ Press Space on a file in Finder to preview it; thumbnails show up as file icons.
 
 3D previews are interactive: drag to orbit, scroll to zoom, right-drag to pan.
 
-STEP files are tessellated on the fly by Open CASCADE running as WebAssembly,
-which takes about a second per megabyte, so there are size limits: previews
-handle STEP files up to 48 MB and 3MF files up to 24 MB; Finder thumbnails
-(which must finish within a few seconds) are generated for STEP files up to
-8 MB and 3MF files up to 12 MB. Larger files show a message in the preview and
-a generic icon in Finder. KiCad board exports with every drill hole modelled
-easily exceed these limits; export without holes, or without components, for
+STEP files are tessellated on the fly by Open CASCADE running as WebAssembly.
+Time is about a second per megabyte, but memory is the real limit: the STEP
+reader needs 30–70 MB of memory per MB of file and the WebAssembly kernel can
+address at most 2 GB, so files beyond roughly 30–60 MB (depending on how
+dense they are) cannot be read at all. Previews are attempted up to 64 MB and
+report an out-of-memory error if the kernel runs out; 3MF previews go up to
+24 MB. Finder thumbnails, which must finish within a few seconds, are
+generated for STEP files up to 8 MB and 3MF files up to 12 MB. Larger files
+show a message in the preview and a generic icon in Finder. KiCad board
+exports with every drill hole and component modelled run to hundreds of MB
+and are out of reach; export without holes, or without component models, for
 a previewable file.
 
 ## Building

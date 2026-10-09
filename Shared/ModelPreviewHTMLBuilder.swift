@@ -37,9 +37,11 @@ enum ModelPreviewHTMLBuilder {
         }
 
         // Interactive previews show their own progress overlay, so they can
-        // afford a generous budget; thumbnails must stay within the
-        // system's thumbnail deadline.
-        let timeoutMs = interactive ? 90000 : 15000
+        // afford a generous budget that grows with the file (STEP reading
+        // runs about 1 s per MB; allow four times that); thumbnails must
+        // stay within the system's thumbnail deadline.
+        let megabytes = Double(data.count) / (1024 * 1024)
+        let timeoutMs = interactive ? Int(max(90, megabytes * 4) * 1000) : 15000
         // Tessellation quality: deflection as a ratio of the bounding box.
         // Thumbnails are small, so a coarser mesh (faster to compute) is
         // indistinguishable.
@@ -155,7 +157,33 @@ enum ModelPreviewHTMLBuilder {
         };
         const overlay = document.getElementById("kiql-overlay");
         const overlayText = document.getElementById("kiql-overlay-text");
-        const setStatus = (text) => { overlayText.textContent = text; };
+        // Status text, with an elapsed-time counter once a phase has run
+        // for a few seconds (large STEP files tessellate for minutes).
+        let statusText = "";
+        let statusStarted = Date.now();
+        const setStatus = (text) => {
+            statusText = text;
+            statusStarted = Date.now();
+            overlayText.textContent = text;
+        };
+        setInterval(() => {
+            if (finished || overlay.classList.contains("hidden")) return;
+            const elapsed = Math.round((Date.now() - statusStarted) / 1000);
+            if (elapsed < 3) return;
+            const minutes = Math.floor(elapsed / 60);
+            const seconds = String(elapsed % 60).padStart(2, "0");
+            overlayText.textContent = statusText + " " + minutes + ":" + seconds;
+        }, 1000);
+        // Emscripten reports heap exhaustion as an abort; say what it means.
+        const describeKernelError = (message) => {
+            const text = String(message || "");
+            if (/memory|OOM|enlarge|out of bounds|unreachable/i.test(text)) {
+                return "The CAD kernel ran out of memory reading this file: Open CASCADE needs "
+                    + "30–70 MB per MB of STEP and the WebAssembly kernel can address 2 GB. "
+                    + "Exporting without drill holes or component models gives a previewable file.";
+            }
+            return text || "Open CASCADE could not read this file";
+        };
         const showOverlayError = (message) => {
             overlay.querySelector(".spinner")?.remove();
             overlay.classList.remove("hidden");
@@ -232,7 +260,7 @@ enum ModelPreviewHTMLBuilder {
                         return;
                     }
                     if (!data.ok || !data.result || !data.result.success) {
-                        fail(data.message || "Open CASCADE could not read this file");
+                        fail(describeKernelError(data.message));
                         return;
                     }
                     stopWorker();
@@ -243,18 +271,21 @@ enum ModelPreviewHTMLBuilder {
                     }
                 };
                 occtWorker.onerror = (event) => {
-                    fail("CAD kernel error: " + String(event && event.message || "unknown"));
+                    fail(describeKernelError("CAD kernel error: " + String(event && event.message || "unknown")));
                 };
+                // The buffer is transferred, not copied: large files are
+                // only needed by the kernel from here on.
+                const buffer = fileContent instanceof ArrayBuffer ? fileContent : new Uint8Array(fileContent).buffer;
                 occtWorker.postMessage({
                     format,
-                    buffer: new Uint8Array(fileContent),
+                    buffer: new Uint8Array(buffer),
                     params: {
                         linearUnit: "millimeter",
                         linearDeflectionType: "bounding_box_ratio",
                         linearDeflection: \(linearDeflection),
                         angularDeflection: \(angularDeflection),
                     },
-                });
+                }, [buffer]);
             };
         }
 
@@ -385,7 +416,11 @@ enum ModelPreviewHTMLBuilder {
         </body>
         </html>
         """
-        return PreviewHTMLBuilder.Page(html: html, resources: resources)
+        return PreviewHTMLBuilder.Page(
+            html: html,
+            resources: resources,
+            timeout: TimeInterval(timeoutMs) / 1000 + 10
+        )
     }
 
     /// Worker that loads occt-import-js (script and .wasm, both served

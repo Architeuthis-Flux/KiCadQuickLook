@@ -36,7 +36,7 @@ final class ThumbnailProvider: QLThumbnailProvider {
         let scale = request.scale
 
         DispatchQueue.main.async {
-            self.renderSnapshot(fileURL: fileURL, size: maximumSize, scale: scale) { image, crop in
+            self.renderSnapshot(fileURL: fileURL, size: maximumSize, scale: scale) { image, crop, isCutOut in
                 guard let image = image,
                       let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
                 else {
@@ -63,16 +63,34 @@ final class ThumbnailProvider: QLThumbnailProvider {
                     contextSize = maximumSize
                 }
 
-                handler(QLThumbnailReply(contextSize: contextSize, drawing: { context -> Bool in
+                let reply = QLThumbnailReply(contextSize: contextSize, drawing: { context -> Bool in
                     context.draw(
                         finalImage,
                         in: CGRect(origin: .zero, size: contextSize),
                         byTiling: false
                     )
                     return true
-                }), nil)
+                })
+                if isCutOut {
+                    Self.requestPlainIcon(for: reply)
+                }
+                handler(reply, nil)
             }
         }
+    }
+
+    /// Asks the system to show the thumbnail as-is in Finder's icon mode.
+    ///
+    /// Icon mode normally composites a reply onto a white document card
+    /// with a shadow. Model thumbnails are transparent cut-outs of the
+    /// model's silhouette and should stand alone, the way the system's own
+    /// image and 3D icons do. The reply's icon flavor is not public API;
+    /// it is set through key-value coding only if the property exists, so
+    /// a future macOS without it falls back to the card rather than
+    /// breaking.
+    private static func requestPlainIcon(for reply: QLThumbnailReply) {
+        guard reply.responds(to: NSSelectorFromString("setIconFlavor:")) else { return }
+        reply.setValue(0, forKey: "iconFlavor")
     }
 
     /// Crops the content region out of the square snapshot. KiCanvas
@@ -111,14 +129,14 @@ final class ThumbnailProvider: QLThumbnailProvider {
         fileURL: URL,
         size: CGSize,
         scale: CGFloat,
-        completion: @escaping (NSImage?, ContentCrop?) -> Void
+        completion: @escaping (NSImage?, ContentCrop?, _ isCutOut: Bool) -> Void
     ) {
         // Unlike the preview extension, the thumbnail extension's sandbox
         // denies reads of sibling files even with the temporary-exception
         // entitlement, so .kicad_pro files (whose content lives in the
         // sibling .kicad_pcb/.kicad_sch) always get the drawn placeholder.
         guard fileURL.pathExtension.lowercased() != "kicad_pro" else {
-            completion(nil, nil)
+            completion(nil, nil, false)
             return
         }
         let content: PreviewContent
@@ -128,12 +146,12 @@ final class ThumbnailProvider: QLThumbnailProvider {
             content = try KiCadFileLoader.loadPreviewContent(for: fileURL, thumbnail: true)
         } catch {
             logger.error("thumbnail load failed for \(fileURL.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)")
-            completion(nil, nil)
+            completion(nil, nil, false)
             return
         }
         if case .message = content {
             logger.info("thumbnail fallback (message content) for \(fileURL.lastPathComponent, privacy: .public)")
-            completion(nil, nil)
+            completion(nil, nil, false)
             return
         }
         guard let page = try? PreviewHTMLBuilder.page(
@@ -142,7 +160,7 @@ final class ThumbnailProvider: QLThumbnailProvider {
             interactive: false
         ) else {
             logger.info("thumbnail fallback (page build failed) for \(fileURL.lastPathComponent, privacy: .public)")
-            completion(nil, nil)
+            completion(nil, nil, false)
             return
         }
         logger.info("thumbnail rendering \(fileURL.lastPathComponent, privacy: .public)")
@@ -164,13 +182,19 @@ final class ThumbnailProvider: QLThumbnailProvider {
         window.backgroundColor = .clear
         window.contentView = webView
 
+        // Model pages render over a transparent background, so their
+        // snapshot is a cut-out of the model and is shown without the
+        // document card in Finder's icon mode.
+        var isCutOut = false
+        if case .model = content { isCutOut = true }
+
         var completed = false
         let finish: (NSImage?, ContentCrop?) -> Void = { image, crop in
             guard !completed else { return }
             completed = true
             webView.tearDown()
             window.contentView = nil
-            completion(image, crop)
+            completion(image, crop, image != nil && isCutOut)
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.renderDeadline) {

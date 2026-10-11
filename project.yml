@@ -76,6 +76,7 @@ targets:
             UTTypeDescription: STEP 3D Model
             UTTypeConformsTo:
               - public.data
+              - public.3d-content
             UTTypeTagSpecification:
               public.filename-extension:
                 - step
@@ -86,6 +87,7 @@ targets:
             UTTypeDescription: 3D Manufacturing Format Model
             UTTypeConformsTo:
               - public.data
+              - public.3d-content
             UTTypeTagSpecification:
               public.filename-extension:
                 - 3mf

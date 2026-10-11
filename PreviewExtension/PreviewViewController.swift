@@ -5,6 +5,23 @@ import WebKit
 
 private let logger = Logger(subsystem: "com.kevincappuccio.KiCadQuickLook", category: "preview")
 
+/// QuickLookUI's private companion to `QLPreviewingController`.
+///
+/// Finder's preview pane starts a file drag when the user drags on a
+/// preview unless the preview claims the drag through this protocol. Both
+/// of Apple's 3D preview extensions (SceneKit and the USDZ viewer) conform
+/// to it; `mustHandleDragAtLocation:` in theirs returns YES unconditionally
+/// and `wantsBorder` returns NO. The declaration here mirrors the runtime's
+/// (same name, same optional methods, same type encodings) so the class's
+/// conformance resolves to QuickLookUI's registered protocol.
+@objc(QLPreviewingController_Private)
+protocol QLPreviewingControllerPrivate: NSObjectProtocol {
+    @objc(mustHandleDragAtLocation:)
+    optional func mustHandleDrag(atLocation location: NSPoint) -> Bool
+    @objc optional func wantsBorder() -> Bool
+    @objc optional func preferredMinimumPreviewSize() -> NSSize
+}
+
 /// View-based Quick Look preview controller hosting a KiCanvas render.
 ///
 /// View-based (rather than data-based `QLPreviewReply`) so the preview is
@@ -12,12 +29,32 @@ private let logger = Logger(subsystem: "com.kevincappuccio.KiCadQuickLook", cate
 /// window. The Quick Look completion handler is deferred until KiCanvas
 /// reports that it has painted, otherwise Quick Look snapshots a blank page.
 @objc(PreviewViewController)
-final class PreviewViewController: NSViewController, QLPreviewingController {
+final class PreviewViewController: NSViewController, QLPreviewingController, QLPreviewingControllerPrivate {
     private var webView: KiCanvasWebView?
+    /// Whether the current page responds to mouse drags (orbiting a model,
+    /// panning a board) rather than showing static content.
+    private var isInteractive = false
+    /// Whether the current page draws over a transparent background.
+    private var isTransparent = false
 
     override func loadView() {
         // Never called with a nib; provide a container so QL can size us.
         view = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    }
+
+    // MARK: - Host interaction hints (QLPreviewingController_Private)
+
+    @objc(mustHandleDragAtLocation:)
+    func mustHandleDrag(atLocation location: NSPoint) -> Bool {
+        logger.debug("host asked mustHandleDragAtLocation: -> \(self.isInteractive, privacy: .public)")
+        return isInteractive
+    }
+
+    /// Transparent model pages float over the host like the system's 3D
+    /// previews; opaque KiCanvas pages keep the host's usual frame.
+    @objc func wantsBorder() -> Bool {
+        logger.debug("host asked wantsBorder -> \(!self.isTransparent, privacy: .public)")
+        return !isTransparent
     }
 
     func preparePreviewOfFile(at url: URL, completionHandler handler: @escaping (Error?) -> Void) {
@@ -29,6 +66,17 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             logger.error("load failed: \(String(describing: error), privacy: .public)")
             handler(error)
             return
+        }
+        switch content {
+        case .document:
+            isInteractive = true
+            isTransparent = false
+        case .model:
+            isInteractive = true
+            isTransparent = true
+        case .message:
+            isInteractive = false
+            isTransparent = false
         }
 
         let page: PreviewHTMLBuilder.Page

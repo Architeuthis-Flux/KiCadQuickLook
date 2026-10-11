@@ -1,5 +1,8 @@
 import Foundation
+import os.log
 import WebKit
+
+private let eventLogger = Logger(subsystem: "com.kevincappuccio.KiCadQuickLook", category: "events")
 
 /// A WKWebView wired up to load a self-contained KiCanvas page and report
 /// when the render has actually painted (via the `renderState` script
@@ -104,6 +107,33 @@ final class KiCanvasWebView: WKWebView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
+    }
+
+    // MARK: - Mouse event tracing
+
+    // Hosts differ in which mouse events they forward to a remotely hosted
+    // preview (the Quick Look panel forwards drags; Finder's preview pane
+    // only once the preview claims them, see PreviewViewController). Trace
+    // what arrives, at debug level, so the behaviour can be observed with
+    // `log stream --level debug --predicate 'subsystem == "com.kevincappuccio.KiCadQuickLook"'`.
+
+    private func trace(_ event: NSEvent, _ name: StaticString) {
+        eventLogger.debug("\(name, privacy: .public) at \(event.locationInWindow.x, privacy: .public),\(event.locationInWindow.y, privacy: .public)")
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        trace(event, "mouseDown")
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        trace(event, "mouseDragged")
+        super.mouseDragged(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        trace(event, "mouseUp")
+        super.mouseUp(with: event)
     }
 
     /// Loads the page and reports progress on the main thread.

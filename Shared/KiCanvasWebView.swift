@@ -26,6 +26,10 @@ final class KiCanvasWebView: WKWebView {
         private var onReady: (() -> Void)?
         private var onRendered: ((Result<Void, RenderError>) -> Void)?
         private(set) var generation = 0
+        /// Cache key the current page may store geometry under.
+        var meshCacheKey: String?
+        /// Base64 chunks of the geometry blob, in arrival order.
+        private var meshChunks: [Int: String] = [:]
 
         /// Arms the coordinator for a new load; any pending completion from
         /// a previous load is dropped. Returns the new load's generation,
@@ -58,6 +62,10 @@ final class KiCanvasWebView: WKWebView {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
+            if message.name == "modelCache" {
+                receiveMeshChunk(message.body)
+                return
+            }
             guard message.name == "renderState" else { return }
             let status = message.body as? String ?? "unknown"
             if status == "ready" {
@@ -68,6 +76,34 @@ final class KiCanvasWebView: WKWebView {
                 finish(.failure(.timedOut))
             } else {
                 finish(.failure(.pageError(status)))
+            }
+        }
+
+        /// Reassembles the geometry blob the model page sends after
+        /// tessellating, and stores it once every chunk has arrived. Only
+        /// the key the page was built with is accepted.
+        private func receiveMeshChunk(_ body: Any) {
+            guard let expectedKey = meshCacheKey,
+                  let chunk = body as? [String: Any],
+                  let key = chunk["key"] as? String, key == expectedKey,
+                  let index = chunk["index"] as? Int,
+                  let total = chunk["total"] as? Int,
+                  let data = chunk["data"] as? String,
+                  index >= 0, index < total
+            else { return }
+            meshChunks[index] = data
+            guard meshChunks.count == total else { return }
+            let chunks = meshChunks
+            meshChunks = [:]
+            DispatchQueue.global(qos: .utility).async {
+                var combined = ""
+                combined.reserveCapacity(chunks.values.reduce(0) { $0 + $1.utf8.count })
+                for position in 0..<total {
+                    guard let piece = chunks[position] else { return }
+                    combined += piece
+                }
+                guard let blob = Data(base64Encoded: combined) else { return }
+                MeshCache.shared.store(key: key, data: blob)
             }
         }
 
@@ -91,6 +127,7 @@ final class KiCanvasWebView: WKWebView {
     init(frame: CGRect) {
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.add(coordinator, name: "renderState")
+        configuration.userContentController.add(coordinator, name: "modelCache")
         configuration.setURLSchemeHandler(schemeHandler, forURLScheme: KiCanvasSchemeHandler.scheme)
         // WebKit suspends scheduling for web views it considers inactive
         // (offscreen windows, occluded previews). Big boards paint for tens
@@ -166,6 +203,7 @@ final class KiCanvasWebView: WKWebView {
             coordinator.finish(.failure(.timedOut), generation: generation)
         }
         startKeepAlive()
+        coordinator.meshCacheKey = page.meshCacheKey
         for (path, resource) in page.resources {
             schemeHandler.setResource(path: path, mimeType: resource.mimeType, data: resource.data)
         }
@@ -214,6 +252,7 @@ final class KiCanvasWebView: WKWebView {
     func tearDown() {
         stopKeepAlive()
         configuration.userContentController.removeScriptMessageHandler(forName: "renderState")
+        configuration.userContentController.removeScriptMessageHandler(forName: "modelCache")
         navigationDelegate = nil
     }
 }

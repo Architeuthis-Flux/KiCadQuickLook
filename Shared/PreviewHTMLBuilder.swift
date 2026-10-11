@@ -28,14 +28,17 @@ enum PreviewHTMLBuilder {
         /// giving up; pages whose work scales with the input (STEP
         /// tessellation) ask for more.
         var timeout: TimeInterval = 100
+        /// When set, geometry the page sends back through the `modelCache`
+        /// script message is stored in the mesh cache under this key.
+        var meshCacheKey: String? = nil
     }
 
     static func page(for content: PreviewContent, bundle: Bundle = .main, interactive: Bool = true) throws -> Page {
         switch content {
         case .document(let type, let text):
             return try documentPage(type: type, content: text, bundle: bundle, interactive: interactive)
-        case .model(let format, let data):
-            return try ModelPreviewHTMLBuilder.page(format: format, data: data, bundle: bundle, interactive: interactive)
+        case .model(let model):
+            return try ModelPreviewHTMLBuilder.page(model: model, bundle: bundle, interactive: interactive)
         case .message(let title, let detail):
             return Page(html: messagePage(title: title, detail: detail), resources: [:])
         }

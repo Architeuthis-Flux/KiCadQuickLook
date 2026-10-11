@@ -11,7 +11,14 @@ Press Space on a file in Finder to preview it; thumbnails show up as file icons.
 | STEP model | `.step`, `.stp` | [Open CASCADE](https://dev.opencascade.org) (WebAssembly, via [occt-import-js](https://github.com/kovacsv/occt-import-js)) + [Online 3D Viewer](https://github.com/kovacsv/Online3DViewer) |
 | 3MF model | `.3mf` | Online 3D Viewer (three.js) |
 
-3D previews are interactive: drag to orbit, scroll to zoom, right-drag to pan.
+3D previews are interactive: drag to orbit, scroll to zoom, right-drag to pan,
+in the Quick Look panel and in Finder's preview pane alike.
+
+STEP geometry is cached once tessellated (keyed by the file's content hash,
+in each extension's container under `Library/Caches/meshes`, about 1 GB at
+most), so a file previews instantly after its first open, and a thumbnail
+generated while browsing a folder makes the later preview instant too. Cached
+files also get thumbnails regardless of the size cap below.
 
 STEP files are tessellated on the fly by Open CASCADE running as WebAssembly.
 Time is about a second per megabyte, but memory is the real limit: the STEP

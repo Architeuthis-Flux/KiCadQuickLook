@@ -26,10 +26,23 @@ enum ModelFormat: String {
     }
 }
 
+/// A 3D model to render: the file's bytes, or tessellated geometry from
+/// the mesh cache when the file was imported before.
+struct ModelDocument {
+    let format: ModelFormat
+    /// The source file; empty when `cachedMesh` is set (the page then only
+    /// needs the format, carried by the resource name).
+    let data: Data
+    /// Mesh cache key, when the file qualifies for caching.
+    let cacheKey: String?
+    /// Previously tessellated geometry in the mesh cache's blob format.
+    let cachedMesh: Data?
+}
+
 /// What the preview should display for a given file.
 enum PreviewContent {
     case document(type: KiCadDocumentType, content: String)
-    case model(format: ModelFormat, data: Data)
+    case model(ModelDocument)
     case message(title: String, detail: String)
 }
 
@@ -89,6 +102,11 @@ enum KiCadFileLoader {
         80 * 1024 * 1024 + size * 50
     }
 
+    /// Tessellation quality, shared by thumbnails and previews so one
+    /// cache entry serves both. Reading the B-rep dominates import time,
+    /// so a finer mesh costs almost nothing extra.
+    static let tessellationParameters = "lin=0.002;ang=0.6"
+
     /// - Parameter thumbnail: Whether the content feeds the thumbnail
     ///   extension, whose much shorter deadline lowers the model size cap.
     static func loadPreviewContent(for url: URL, thumbnail: Bool = false) throws -> PreviewContent {
@@ -126,6 +144,25 @@ enum KiCadFileLoader {
 
     private static func loadModel(_ url: URL, format: ModelFormat, thumbnail: Bool) throws -> PreviewContent {
         let maximumSize = maximumModelSize(for: format, thumbnail: thumbnail)
+
+        // STEP geometry is cached once tessellated. A cached file skips the
+        // kernel entirely, so it also skips the size caps: thumbnails of
+        // large boards appear once the board has been previewed, and
+        // previews of boards whose thumbnails were generated are instant.
+        if format == .step, let size = fileSize(url), size <= MeshCache.maximumSourceSize {
+            let data = try readData(url, limit: MeshCache.maximumSourceSize)
+            guard looksLikeSTEP(data) else {
+                return .message(title: url.lastPathComponent, detail: "Not a STEP file (no ISO-10303-21 header).")
+            }
+            let key = MeshCache.key(for: data, format: format, parameters: tessellationParameters)
+            if let mesh = MeshCache.shared.lookup(key: key) {
+                return .model(ModelDocument(format: format, data: Data(), cacheKey: key, cachedMesh: mesh))
+            }
+            if size <= maximumSize {
+                return .model(ModelDocument(format: format, data: data, cacheKey: key, cachedMesh: nil))
+            }
+        }
+
         if let size = fileSize(url), size > maximumSize {
             let formatter = ByteCountFormatter()
             formatter.countStyle = .file
@@ -158,7 +195,7 @@ enum KiCadFileLoader {
                 )
             }
         }
-        return .model(format: format, data: data)
+        return .model(ModelDocument(format: format, data: data, cacheKey: nil, cachedMesh: nil))
     }
 
     /// STEP Part 21 files open with `ISO-10303-21;`, possibly after a BOM

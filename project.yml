@@ -43,6 +43,8 @@ targets:
       path: App/KiCadQuickLook.entitlements
       properties:
         com.apple.security.app-sandbox: true
+        com.apple.security.application-groups:
+          - LK2RWK9EUK.com.kevincappuccio.KiCadQuickLook
         com.apple.security.files.user-selected.read-only: true
     info:
       path: App/Info.plist
@@ -116,6 +118,8 @@ targets:
       path: PreviewExtension/PreviewExtension.entitlements
       properties:
         com.apple.security.app-sandbox: true
+        com.apple.security.application-groups:
+          - LK2RWK9EUK.com.kevincappuccio.KiCadQuickLook
         com.apple.security.network.client: true
         com.apple.security.files.user-selected.read-only: true
         com.apple.security.temporary-exception.files.absolute-path.read-only:
@@ -157,6 +161,8 @@ targets:
       path: ThumbnailExtension/ThumbnailExtension.entitlements
       properties:
         com.apple.security.app-sandbox: true
+        com.apple.security.application-groups:
+          - LK2RWK9EUK.com.kevincappuccio.KiCadQuickLook
         com.apple.security.network.client: true
         com.apple.security.files.user-selected.read-only: true
         com.apple.security.temporary-exception.files.absolute-path.read-only:

@@ -74,8 +74,12 @@ do {
 switch content {
 case .document(let type, let text):
     print("content: \(type) document, \(text.utf8.count) bytes")
-case .model(let format, let data):
-    print("content: \(format.displayName) model, \(data.count) bytes")
+case .model(let model):
+    if let mesh = model.cachedMesh {
+        print("content: \(model.format.displayName) model from mesh cache (\(mesh.count) bytes)")
+    } else {
+        print("content: \(model.format.displayName) model, \(model.data.count) bytes\(model.cacheKey != nil ? ", will be cached" : "")")
+    }
 case .message(let title, let detail):
     print("content: message — \(title): \(detail)")
 }

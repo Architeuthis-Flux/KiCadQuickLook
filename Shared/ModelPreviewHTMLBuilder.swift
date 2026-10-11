@@ -10,43 +10,54 @@ import Foundation
 /// message protocol ("ready", "loaded", "error: …", "timeout").
 enum ModelPreviewHTMLBuilder {
     static func page(
-        format: ModelFormat,
-        data: Data,
+        model: ModelDocument,
         bundle: Bundle,
         interactive: Bool
     ) throws -> PreviewHTMLBuilder.Page {
+        let format = model.format
         // The viewer picks its importer from the URL's extension.
         let documentPath = "/model.\(format.fileExtension)"
+        let usesCachedMesh = model.cachedMesh != nil
         var resources: [String: KiCanvasSchemeHandler.Resource] = [
             "/o3dv.min.js": .init(
                 mimeType: "text/javascript",
                 data: try PreviewHTMLBuilder.resourceData("o3dv.min", extension: "js", bundle: bundle)
             ),
-            documentPath: .init(mimeType: "application/octet-stream", data: data),
         ]
-        if format == .step {
-            resources["/occt-import-js.js"] = .init(
-                mimeType: "text/javascript",
-                data: try PreviewHTMLBuilder.resourceData("occt-import-js", extension: "js", bundle: bundle)
-            )
-            resources["/occt-import-js.wasm"] = .init(
-                mimeType: "application/wasm",
-                data: try PreviewHTMLBuilder.resourceData("occt-import-js", extension: "wasm", bundle: bundle)
-            )
-            resources["/occt-worker.js"] = .init(mimeType: "text/javascript", data: Data(occtWorkerScript.utf8))
+        if let mesh = model.cachedMesh {
+            // Cache hit: the page loads tessellated geometry and never
+            // touches the kernel. The importer still fetches the "file",
+            // so serve a stub that only carries the extension.
+            resources["/model.mesh"] = .init(mimeType: "application/octet-stream", data: mesh)
+            resources[documentPath] = .init(mimeType: "application/octet-stream", data: Data("ISO-10303-21;".utf8))
+        } else {
+            resources[documentPath] = .init(mimeType: "application/octet-stream", data: model.data)
+            if format == .step {
+                resources["/occt-import-js.js"] = .init(
+                    mimeType: "text/javascript",
+                    data: try PreviewHTMLBuilder.resourceData("occt-import-js", extension: "js", bundle: bundle)
+                )
+                resources["/occt-import-js.wasm"] = .init(
+                    mimeType: "application/wasm",
+                    data: try PreviewHTMLBuilder.resourceData("occt-import-js", extension: "wasm", bundle: bundle)
+                )
+                resources["/occt-worker.js"] = .init(mimeType: "text/javascript", data: Data(occtWorkerScript.utf8))
+            }
         }
 
         // Interactive previews show their own progress overlay, so they can
         // afford a generous budget that grows with the file (STEP reading
         // runs about 1 s per MB; allow four times that); thumbnails must
         // stay within the system's thumbnail deadline.
-        let megabytes = Double(data.count) / (1024 * 1024)
+        let megabytes = Double(model.data.count) / (1024 * 1024)
         let timeoutMs = interactive ? Int(max(90, megabytes * 4) * 1000) : 15000
-        // Tessellation quality: deflection as a ratio of the bounding box.
-        // Thumbnails are small, so a coarser mesh (faster to compute) is
-        // indistinguishable.
-        let linearDeflection = interactive ? 0.001 : 0.004
-        let angularDeflection = interactive ? 0.5 : 0.8
+        // Tessellation quality (deflection as a ratio of the bounding box),
+        // shared by thumbnails and previews so one cache entry serves both.
+        let linearDeflection = 0.002
+        let angularDeflection = 0.6
+        // Geometry is sent back to Swift for the cache only when the page
+        // ran the kernel itself and the file qualifies.
+        let cacheKey = usesCachedMesh ? "" : (model.cacheKey ?? "")
 
         let html = """
         <!DOCTYPE html>
@@ -223,10 +234,75 @@ enum ModelPreviewHTMLBuilder {
             return;
         }
 
+        // Mesh blob format (produced by the worker, stored by Swift in the
+        // mesh cache, consumed here): "KQLM", u32 version, u32 JSON length,
+        // JSON (node tree, mesh names, colors, face ranges, array offsets),
+        // padding to 4 bytes, then Float32 positions/normals and Uint32
+        // indices. Typed array views over the blob feed the viewer's
+        // importer directly: it only indexes `.array[i]`.
+        const MESH_MAGIC = 0x4d4c514b;  // "KQLM" little-endian
+        const parseMeshBlob = (buffer) => {
+            const view = new DataView(buffer);
+            if (buffer.byteLength < 12 || view.getUint32(0, true) !== MESH_MAGIC || view.getUint32(4, true) !== 1) {
+                throw new Error("unrecognized mesh cache entry");
+            }
+            const jsonLength = view.getUint32(8, true);
+            const json = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 12, jsonLength)));
+            const base = 12 + ((jsonLength + 3) & ~3);
+            const floats = (ref) => new Float32Array(buffer, base + ref.offset, ref.count);
+            const ints = (ref) => new Uint32Array(buffer, base + ref.offset, ref.count);
+            return {
+                success: true,
+                root: json.root,
+                meshes: json.meshes.map((m) => ({
+                    name: m.name,
+                    color: m.color,
+                    brep_faces: m.brep_faces,
+                    attributes: {
+                        position: { array: floats(m.position), itemSize: 3 },
+                        ...(m.normal ? { normal: { array: floats(m.normal), itemSize: 3 } } : {}),
+                    },
+                    index: { array: ints(m.index) },
+                })),
+            };
+        };
+
+        // Hands a freshly tessellated blob to Swift for the mesh cache, in
+        // base64 chunks (script messages carry strings, and a board can be
+        // tens of megabytes). "loaded" waits for the hand-off (bounded) so
+        // a host that tears the page down at "loaded" still gets it.
+        const cacheKey = "\(cacheKey)";
+        let cachePending = Promise.resolve();
+        const sendToCache = (buffer) => {
+            if (!cacheKey || !window.webkit?.messageHandlers?.modelCache) return;
+            cachePending = new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onerror = () => resolve();
+                reader.onload = () => {
+                    try {
+                        const base64 = String(reader.result).split(",", 2)[1] || "";
+                        const chunkSize = 6 * 1024 * 1024;
+                        const total = Math.max(1, Math.ceil(base64.length / chunkSize));
+                        for (let index = 0; index < total; index++) {
+                            window.webkit.messageHandlers.modelCache.postMessage({
+                                key: cacheKey,
+                                index,
+                                total,
+                                data: base64.substr(index * chunkSize, chunkSize),
+                            });
+                        }
+                    } catch (e) {}
+                    resolve();
+                };
+                reader.readAsDataURL(new Blob([buffer]));
+                setTimeout(resolve, 5000);
+            });
+        };
+
         // Online 3D Viewer's STEP importer fetches occt-import-js from a CDN
-        // inside a Web Worker. Replace it with a worker served from this
-        // page's own scheme, and hand the result to the importer's own
-        // converter.
+        // inside a Web Worker. Replace it: load cached geometry when Swift
+        // served some, otherwise run a worker served from this page's own
+        // scheme, and hand the result to the importer's own converter.
         if (OV.ImporterOcct) {
             // CAD files (KiCad board exports included) are Z-up; the
             // loader rotates Z-up models into the viewer's Y-up scene.
@@ -237,6 +313,13 @@ enum ModelPreviewHTMLBuilder {
                     this.SetError(message);
                     onFinish();
                 };
+                const importBlob = (buffer) => {
+                    try {
+                        this.ImportResultJson(parseMeshBlob(buffer), onFinish);
+                    } catch (e) {
+                        fail(String(e && e.message || e));
+                    }
+                };
                 let format = null;
                 if (this.extension === "stp" || this.extension === "step") format = "step";
                 else if (this.extension === "igs" || this.extension === "iges") format = "iges";
@@ -246,6 +329,21 @@ enum ModelPreviewHTMLBuilder {
                     return;
                 }
                 if (format !== "brep") this.model.SetUnit(OV.Unit.Millimeter);
+
+                if (\(usesCachedMesh)) {
+                    setStatus("Loading cached geometry…");
+                    const request = new XMLHttpRequest();
+                    request.open("GET", "/model.mesh", true);
+                    request.responseType = "arraybuffer";
+                    request.onload = () => {
+                        if (request.status === 200 && request.response) importBlob(request.response);
+                        else fail("the cached geometry could not be loaded");
+                    };
+                    request.onerror = () => fail("the cached geometry could not be loaded");
+                    request.send(null);
+                    return;
+                }
+
                 setStatus("Tessellating…");
                 try {
                     occtWorker = new Worker("/occt-worker.js");
@@ -259,16 +357,13 @@ enum ModelPreviewHTMLBuilder {
                         setStatus(data.status);
                         return;
                     }
-                    if (!data.ok || !data.result || !data.result.success) {
+                    if (!data.ok || !data.blob) {
                         fail(describeKernelError(data.message));
                         return;
                     }
                     stopWorker();
-                    try {
-                        this.ImportResultJson(data.result, onFinish);
-                    } catch (e) {
-                        fail(String(e && e.message || e));
-                    }
+                    sendToCache(data.blob);
+                    importBlob(data.blob);
                 };
                 occtWorker.onerror = (event) => {
                     fail(describeKernelError("CAD kernel error: " + String(event && event.message || "unknown")));
@@ -390,7 +485,9 @@ enum ModelPreviewHTMLBuilder {
                     return;
                 }
                 overlay.classList.add("hidden");
-                requestAnimationFrame(() => requestAnimationFrame(() => finish("loaded")));
+                cachePending.then(() => {
+                    requestAnimationFrame(() => requestAnimationFrame(() => finish("loaded")));
+                });
             },
             onTextureLoaded: () => viewer.Render(),
             onLoadError: (importError) => {
@@ -419,15 +516,59 @@ enum ModelPreviewHTMLBuilder {
         return PreviewHTMLBuilder.Page(
             html: html,
             resources: resources,
-            timeout: TimeInterval(timeoutMs) / 1000 + 10
+            timeout: TimeInterval(timeoutMs) / 1000 + 10,
+            meshCacheKey: model.cacheKey.flatMap { usesCachedMesh ? nil : $0 }
         )
     }
 
     /// Worker that loads occt-import-js (script and .wasm, both served
-    /// over kiql://) and tessellates one file per message.
+    /// over kiql://), tessellates one file per message, and packs the
+    /// result into the mesh blob format (see the page script). Packing in
+    /// the worker keeps the page's thread free and replaces a structured
+    /// clone of millions of boxed numbers with one transferred buffer.
     private static let occtWorkerScript = """
     importScripts("/occt-import-js.js");
     let kernel = null;
+
+    const packResult = (result) => {
+        const meshes = [];
+        const arrays = [];
+        let offset = 0;
+        const append = (array) => {
+            const ref = { offset, count: array.length };
+            arrays.push(array);
+            offset += array.byteLength;
+            return ref;
+        };
+        for (const mesh of result.meshes) {
+            const position = append(Float32Array.from(mesh.attributes.position.array));
+            const normal = mesh.attributes.normal ? append(Float32Array.from(mesh.attributes.normal.array)) : null;
+            const index = append(Uint32Array.from(mesh.index.array));
+            meshes.push({
+                name: mesh.name || "",
+                color: mesh.color || null,
+                brep_faces: (mesh.brep_faces || []).map((f) => ({ first: f.first, last: f.last, color: f.color || null })),
+                position,
+                normal,
+                index,
+            });
+        }
+        const json = new TextEncoder().encode(JSON.stringify({ root: result.root, meshes }));
+        const headerLength = 12 + ((json.length + 3) & ~3);
+        const blob = new ArrayBuffer(headerLength + offset);
+        const view = new DataView(blob);
+        view.setUint32(0, 0x4d4c514b, true);
+        view.setUint32(4, 1, true);
+        view.setUint32(8, json.length, true);
+        new Uint8Array(blob, 12, json.length).set(json);
+        let cursor = headerLength;
+        for (const array of arrays) {
+            new Uint8Array(blob, cursor, array.byteLength).set(new Uint8Array(array.buffer));
+            cursor += array.byteLength;
+        }
+        return blob;
+    };
+
     onmessage = async (event) => {
         try {
             const message = event.data;
@@ -437,7 +578,13 @@ enum ModelPreviewHTMLBuilder {
                 postMessage({ status: "Tessellating…" });
             }
             const result = kernel.ReadFile(message.format, message.buffer, message.params);
-            postMessage({ ok: true, result });
+            if (!result || !result.success) {
+                postMessage({ ok: false, message: "Open CASCADE could not read this file" });
+                return;
+            }
+            postMessage({ status: "Packing geometry…" });
+            const blob = packResult(result);
+            postMessage({ ok: true, blob }, [blob]);
         } catch (e) {
             postMessage({ ok: false, message: String(e && e.message || e) });
         }
